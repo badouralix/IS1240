@@ -1,0 +1,216 @@
+\documentclass[a4paper,10pt]{article}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{lmodern}
+\usepackage[francais]{babel}
+\usepackage{fullpage}
+
+\title{Rapport de Calculs Intensifs\\Multiplication matrice-vecteur}
+\author{Ayaz BADOURALY}
+%\date{}
+
+% À envoyer à frederic.magoules@ecp.fr %
+
+\begin{document}
+
+\maketitle
+
+\section{Introduction}
+
+Le problème posé est celui de la parallélisation et de la distribution de l'application d'une matrice à un vecteur. Il s'agit d'un problème courant à résoudre dans la vie d'un ingénieur ou d'un chercheur, notamment pour la résolution de problèmes différentiels.
+
+\bigskip
+
+Ce rapport a pour but de présenter le travail que j'ai effectué entre le vendredi 19 février et le mercredi 24 février. Il s'agit d'un support au code source lui-même. Les points les plus subtiles du code source sont expliqués sous forme de commentaires directement dans les fichiers sources.
+
+\section{Présentation du projet}
+
+Pour me rapprocher au plus près d'un cas réel avec distribution des données sur un cluster, j'ai choisi de séparer le projet en deux parties. 
+
+La première partie concerne la génération des données (~matrice et vecteur à multiplier~), et est exécutée par \texttt{bin/generator}. La seconde partie concerne le traitement des données et la multiplication en elle-même, exécutée par \texttt{bin/calculator}.
+
+\bigskip
+
+Concernant l'arborescence du répertoire, les fichiers sont séparés enre le dossier \texttt{src/} pour les sources principales (~\texttt{src/generator.c} et \texttt{src/calculator.c}~), le dossier \texttt{lib/} pour les librairies (~\texttt{lib/file.c}, \texttt{lib/matrix.c} et \texttt{lib/vector.c}~) et le dossier \texttt{tests/} pour les tests unitaires.
+
+\bigskip
+
+La compilation\footnote{\textit{N.B.:} travaillant sous Linux, je garantis le fonctionnement sur cet OS \textemdash $ $ et plus généralement sur tout OS certifié POSIX \textemdash $ $ mais pas sur Windows ( j'ai tout de même ajouté quelques instructions préprocesseurs concernant cet OS ). Si besoin, je suis en mesure de fournir une machine Linux fonctionnelle.} est automatisée grâce à un \texttt{Makefile}.
+
+\section{Les librairies ( \texttt{lib/} )}
+
+\subsection{\texttt{lib/file.h}}
+
+Ce fichier contient toutes les fonctions utiles pour intéragir avec la mémoire dure : lecture du disque et écriture sur le disque.
+
+\subsection{\texttt{lib/matrix.h}}
+
+Ce fichier contient la définition de la structure \texttt{Matrix}. Elle contient deux entiers pour le nombre de lignes et le nombre de colonnes, et un tableau à deux dimensions alloué dynamiquement et qui contient les éléments de la matrice. 
+
+J'ai aussi écrit quelques méthodes, pour pouvoir intéragir plus facilement avec la structure de données.
+
+\vspace{1cm}
+
+\subsection{\texttt{lib/vector.h}}
+
+Il s'agit d'une librairie analogue à \texttt{matrix.h}. Les structures sont proches et les méthodes quasiment identiques.
+
+\bigskip
+
+Ce fichier contient la définition de la structure \texttt{Vector}. Elle contient un entier pour le nombre composantes, et un tableau à une dimension alloué dynamiquement et qui contient les éléments du vecteur. 
+
+J'ai aussi écrit quelques méthodes, pour pouvoir intéragir plus facilement avec la structure de données.
+
+\subsection{À propos des éléments des matrices et des vecteurs}
+
+La façon la plus simple de procéder est de se limiter à des matrices et des vecteurs de \texttt{int}. C'est le type de données le plus courant et c'est d'ailleurs ce qui est choisi par défaut.
+
+\bigskip
+
+Néanmoins, j'ai écrit mon code de telle façon que l'on puisse choisir au moment de la compilation le type de données des matrices et des vecteurs. Le préprocesseur définit deux variables indiquant le type de données à utiliser : \texttt{TYPE$\_$NUM} et \texttt{TYPE$\_$ELMT}. Ces variables sont couplées suivant la règle : 
+
+\medskip
+
+\begin{itemize}
+  \item \texttt{TYPE$\_$NUM = 0} $\Longleftrightarrow$ \texttt{TYPE$\_$ELMT = int}
+  \item \texttt{TYPE$\_$NUM = 1} $\Longleftrightarrow$ \texttt{TYPE$\_$ELMT = long}
+  \item \texttt{TYPE$\_$NUM = 2} $\Longleftrightarrow$ \texttt{TYPE$\_$ELMT = float}
+  \item \texttt{TYPE$\_$NUM = 3} $\Longleftrightarrow$ \texttt{TYPE$\_$ELMT = double}
+\end{itemize}
+
+\bigskip
+
+On peut spécifier la macro \texttt{TYPE$\_$NUM = <choix de l'utilisateur>} avec l'option \texttt{-D} du compilateur \texttt{gcc} ( \textit{cf.} \texttt{Makefile} ).
+
+\bigskip
+
+À noter que conformément à ce qui est attendu, le benchmark montre que, à dimension équivalente, un problème sur des \texttt{int} est résolu beaucoup plus rapidement qu'on problème sur des \texttt{float}.
+
+\section{Les sources ( \texttt{src/} )}
+
+Chacune des sources, contenue dans le dossier \texttt{src/}, utilise les librairies définies plus haut. Lorsqu'elles sont compilées, le \texttt{Makefile} crée les exécutables dans le dossier \texttt{bin/}.
+
+\bigskip
+
+J'ai choisi d'adopter une structure de communication maître/esclaves. À l'initiation de la session \texttt{MPI}, un processus \texttt{root} est défini et il agira en tant que maître. Il ne fait aucun calcul sur les données, il envoie seulement des paramètres et des ordres aux autres processus qui sont de fait esclaves.
+
+\subsection{\texttt{bin/generator}}
+
+Le fichier source \texttt{src/generator.c} génère un exécutable \texttt{bin/generator} charger de générer la matrice et le vecteur (~que l'on multiplira dans un deuxième temps~).
+
+\bigskip
+
+\begin{enumerate}
+  \item Le processus \texttt{root} calcule les tailles des données à traiter par chaque processus\footnote{Le calcul est fait de manière intelligente, pour distribuer le plus également possible des données. Par exemple, s'il y a 10 données à distribuer sur 4 processus esclaves, alors les tailles calculées seront : $3 - 3 - 2 - 2$.} ( \textit{cf. ligne 118} ).
+  \item Puis il envoie un \texttt{int} contenant cette taille au processus chargé du calcul ( \textit{cf. ligne 119} ).
+  \item Chaque processus esclave attend la taille des données qu'il aura à calculer ; une fois reçue, le processus crée une petite matrice aléatoire et un petit vecteur aléatoire ( \textit{cf. lignes 122 à 131} ).
+  \item On écrit les données dans des fichiers dans \texttt{data/} ( il y a une gestion des erreurs si on n'arrive pas à atteindre ce dossier, typiquement sous Windows ). Ces fichiers sont communs à tous les processus ( à la fin de l'exécution, on obtient trois fichiers \texttt{data/metadata}, \texttt{data/matrix} et \texttt{data/vector} ). Pour assurer que les données seront écrites dans le bon ordre, on utilise le protocole suivant : 
+  \begin{itemize}
+    \item le processus \texttt{root} écrit les métadonnées dans \texttt{data/metadata} ( \textit{cf. lignes 146 à 150} ) ;
+    \item le processus \texttt{root} envoie un \texttt{ping} au processus \texttt{p0} ( \textit{cf. ligne 159} ) et il attend un \texttt{pong} ( \textit{cf. ligne 160} ) ;
+    \item le processus \texttt{p0} attends un \texttt{ping} du processus \texttt{root} et le reçoit ( \textit{cf. ligne 171} ) ;
+    \item le processus \texttt{p0} ouvre les fichiers appropriés, écrit dedans et les referme (~\textit{cf. lignes 175 à 181}~) ;
+    \item le processus \texttt{p0} envoie un \texttt{pong} au processus \texttt{root} ( \textit{cf. ligne 184} ) ;
+    \item le processus \texttt{root} reçoit le \texttt{pong} ( \textit{cf. ligne 160} ) ;
+    \item le processus \texttt{root} envoie un \texttt{ping} au processus \texttt{p1} et il attend un \texttt{pong} ;
+    \item le processus \texttt{p1} reçoit le \texttt{ping} ;
+    \item le processus \texttt{p1} ouvre les fichiers appropriés, écrit dedans et les referme ;
+    \item le processus \texttt{p1} envoie un \texttt{pong} au processus \texttt{root} ;
+    \item le processus \texttt{root} reçoit le \texttt{pong} ;
+    \item $ \cdots $
+  \end{itemize}
+\end{enumerate}
+
+\bigskip
+
+Le programme peut être appelé avec plusieurs options :
+\begin{description}
+  \item[\texttt{-h}]affiche l'aide
+  \item[\texttt{-n <dim>}]$ $\\Prend en argument la taille de la matrice et du vecteur ;\\Si non utilisée, la valeur \texttt{DEFAULT$\_$DIM} est choisie
+  \item[\texttt{-x <max$\_$value>}]$ $\\Prend en argument la valeur maximale des éléments de la matrice et du vecteur ;\\Si non utilisée, la valeur \texttt{DEFAULT$\_$MAX} est choisie
+\end{description}
+
+
+\subsection{\texttt{bin/calculator}}
+
+Le fichier source \texttt{src/calculator.c} génère un exécutable \texttt{bin/calculator} charger de calculer le produit du vecteur \texttt{data/vector} par la matrice \texttt{data/matrix}.
+
+\begin{enumerate}
+  \item Le processus \texttt{root} récupère la dimension de la matrice du fichier \texttt{data/metadata} ( \textit{cf. lignes 94 à 104} ).
+  \item Le processus \texttt{root} calcule les tailles des données à traiter par chaque processus ( dans la variable \texttt{recv$\_$counts} ) et l'offset associé ( dans la variable \texttt{displs} ) ( \textit{cf. lignes 138 à 153} ).
+  \item Le processus \texttt{root} envoie toutes les données à tous les processus  ( \textit{cf. lignes 165 à 168} ).
+  \item Les processus esclaves extraient les données dont ils ont besoin des fichiers \texttt{data/matrix} et \texttt{data/vector} ( \textit{cf. lignes 179 à 184} ).
+  \item Les processus esclaves se transmettent le vecteur avec \texttt{MPI$\_$Allgatherv} ( \textit{cf. lignes 186 à 194} ).
+  \item Les processus esclaves calculent chacun le produit de leur sous-matrice avec le vecteur ( \textit{cf. lignes 198 à 200} ).
+  \item Les données calculées sont enregistrées en suivant le protocole décrit précédemment dans le fichier \texttt{data/result} ( \textit{cf. lignes 216 à 260} ).
+  \item Si le mode \textit{verbose} est activé, les processus esclaves envoient les données calculées au processus \texttt{root}, en les ordonnant avec \texttt{MPI$\_$Gatherv}, et il se charge de l'afficher dans \texttt{stdout} ( \textit{cf. lignes 267 à 288} ).
+\end{enumerate}
+
+\bigskip
+
+Le programme peut être appelé avec plusieurs options :
+\begin{description}
+  \item[\texttt{-h}]affiche l'aide
+  \item[\texttt{-v}]active le mode \textit{verbose}
+  \item[\texttt{-b <buffer$\_$size>}]$ $\\Prend en argument la taille du buffer\footnote{Elle est sauvegardée en mémoire dans la variable globale \texttt{buffer$\_$size} \textemdash $ $ cette forme de variable est la plus simple à utiliser, car elle est utilisée dans plusieurs fichiers du projet et la passer en argument des fonctions l'utilisant s'avère être lourd en termes d'écriture.} ; c'est notamment utile lorsque la taille de la matrice est importante et que le parsing du fichier \texttt{data/matrix} échoue ;\\Si non utilisée, la valeur \texttt{BUFSIZ} est choisie
+\end{description}
+
+\subsection{Codes d'erreur}
+
+J'ai suivi une convention commune à tous les fichiers de \texttt{src/}. Si l'exécution se passe bien, une fonction va retourner \texttt{EXIT$\_$SUCCESS}, c'est-à-dire \texttt{0} sur la majorité des OS. Sinon :
+
+\begin{description}
+  \item[code d'erreur 1]$ $\\une erreur a été détectée sur les paramètres envoyés au programme
+  \item[code d'erreur 2]$ $\\une erreur a été détectée lors d'un traitement sur un fichier ( ouverture, lecture, etc... ) 
+\end{description}
+
+Dans tous les cas, l'erreur est accompagnée d'un message explicatif pour facilité le débuggage.
+
+\bigskip
+
+Une erreur provoque l'arrêt immédiat de tous les proccessus par un \texttt{MPI$\_$Abort}.
+
+\section{Les data ( \texttt{data/} )}
+
+Le dossier \texttt{data/} contient toutes les données écrites en dur sur le disque\footnote{Ceci n'est vrai que pour un OS de type Linux. Sinon, il s'agit du dossier d'exécution des programmes et les fichiers sont suffixés avec \texttt{.txt}.}.
+
+\subsection{\texttt{data/metadata}}
+
+La première ligne de ce fichier contient le nombre de lignes et le nombre de colonnes de la matrice générée par \texttt{bin/generator}. Ils sont séparés par un espace.
+
+\bigskip
+
+Les deux lignes suivantes contiennent les chemins absolus dans l'arborescence du système de fichiers des fichiers \texttt{data/matrix} et \texttt{data/vector}.
+
+\subsection{\texttt{data/matrix}}
+
+Ce fichier contient la matrice générée aléatoirement par \texttt{bin/generator} au format brut. Chaque ligne correspond à une ligne de la matrice. Les éléments d'une même ligne mais de différentes colonnes sont séparés par un espace.
+
+\subsection{\texttt{data/vector}}
+
+Ce fichier contient la matrice générée aléatoirement par \texttt{bin/generator} au format brut. Chaque ligne correspond à une composante du vecteur.
+
+\subsection{\texttt{data/result}}
+
+Ce fichier est le seul à ne pas être généré par \texttt{bin/generator} mais par \texttt{bin/calculator}. 
+
+\bigskip
+
+Il contient le vecteur, produit de la matrice \texttt{data/matrix} et du vecteur \texttt{data/vector}. Il est enregistré au format brut. Chaque ligne correspond à une composante du vecteur.
+
+\section{Les tests ( \texttt{tests/} )}
+
+Le dossier \texttt{tests/} contient deux fichiers :
+\medskip
+\begin{itemize}
+  \item \texttt{t$\_$matrix.c} qui contient tous les tests unitaires de la librairie \texttt{lib/matrix.h}
+  \item \texttt{t$\_$vector.c} qui contient tous les tests unitaires de la librairie \texttt{lib/vector.h}
+\end{itemize}
+
+\vspace{2cm}
+
+\section{Conclusion}
+
+Le code présenté répond effectivement au cahier des charges. On pourrait apporter de nombreuses améliorations pour une faire une librairie de calcul matriciel complète. Notamment, on pourrait rajouter la génération de matrices non carrée ( théoriquement possible avec la \texttt{lib/matrix.h} et utilisée dans \texttt{src/calculator.c}, mais non implémenté dans \texttt{src/generator.c} ), ou la multiplication de deux matrices \textemdash $ $ et la multiplication d'un vecteur par une matrice ne serait alors plus qu'un cas particulier.
+
+\end{document}

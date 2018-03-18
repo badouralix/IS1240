@@ -1,0 +1,8 @@
+index = 0	->	node name = "A"
+index = 1	->	node name = "B"
+index = 2	->	node name = "C"
+index = 3	->	node name = "D"
+index = 4	->	node name = "E"
+index = 5	->	node name = "F"
+index = 6	->	node name = "G"
+index = 7	->	node name = "H"

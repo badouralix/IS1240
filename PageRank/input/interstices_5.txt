@@ -1,0 +1,21 @@
+# https://interstices.info/encart.jsp?id=c_21839&encart=0&size=780,580
+# exemple 5
+#
+# nombre de noeuds
+8
+# liste des arcs
+A B
+B A
+C A
+D A
+D C
+E F
+E G
+E H
+F E
+F G
+F H
+G E
+G F
+G H
+H H
